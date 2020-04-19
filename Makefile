@@ -37,13 +37,20 @@ COMPILER=gcc-7
 
 # Rules for the executable
 
-all: clean main
+all: clean gaviewer
 
-main: main.o Makefile
-	$(COMPILER) main.o $(LINK_ARG) $(GTK_LINK_ARG) -o main 
+gaviewer: main.o Makefile
+	$(COMPILER) main.o $(LINK_ARG) $(GTK_LINK_ARG) -o gaviewer
 
 main.o: main.c Makefile
 	$(COMPILER) $(BUILD_ARG) $(GTK_BUILD_ARG) -c main.c 
 
 clean:
 	rm -f *.o main
+
+test: gaviewer
+	gaviewer -hist test.json -size 200 -toImg genealogy.tga
+
+debug :
+	valgrind -v --track-origins=yes --leak-check=full \
+	--gen-suppressions=yes --show-leak-kinds=all ./gaviewer -hist test.json -size 200 -toImg genealogy.tga
