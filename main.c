@@ -12,11 +12,14 @@ typedef struct Node {
   // Epoch
   unsigned long epoch;
 
-  // Normalised position (centered on (0, 0), one epoch unit
-  VecFloat2D pos;
+  // Position of the node in the image
+  VecFloat3D pos;
 
-  // Parents
-  Node* parents[2];
+  // Parents id
+  unsigned long parents[2];
+
+  // Id
+  unsigned long id;
 
 } Node;
 
@@ -34,14 +37,12 @@ typedef struct {
   // Loaded history
   GAHistory history;
 
-  // Converted history into array of node
-  Node* nodes;
+  // Converted history into GSet of Node, one GSet per epoch
+  // Node are sorted according to the id of their father and their id
+  GSet* nodes;
 
   // Nb of epoch in the history
-  unsigned int nbEpoch;
-
-  // Nb of nodes per epoch
-  unsigned int* nbNodePerEpoch;
+  unsigned long nbEpoch;
 
 } GAViewer;
 
@@ -73,6 +74,12 @@ bool GAViewerHistoryToImg(GAViewer* const that);
 // Create the nodes from the history
 void GAViewerHistoryToNodes(GAViewer* const that);
 
+// Get the max id from the history
+unsigned long GAViewerHistoryGetMaxId(GAViewer* const that);
+
+// Get the nb of epoch from the history
+unsigned long GAViewerHistoryGetNbEpoch(GAViewer* const that);
+
 // Function to create a new GAViewer,
 // Return a pointer to the new GAViewer
 GAViewer* GAViewerCreate(void) {
@@ -98,7 +105,6 @@ GAViewer* GAViewerCreate(void) {
   that->history = GAHistoryCreateStatic();
   that->nodes = NULL;
   that->nbEpoch = 0;
-  that->nbNodePerEpoch = NULL;
 
   // Return the new GAViewer
   return that;
@@ -125,13 +131,21 @@ void GAViewerFree(GAViewer** const that) {
 
   if ((*that)->nodes != NULL) {
 
+    for (
+      unsigned long iEpoch = (*that)->nbEpoch;
+      iEpoch--;) {
+
+      GSet* set = (*that)->nodes + iEpoch;
+      while(GSetNbElem(set) > 0) {
+
+          Node* node = GSetPop(set);
+          free(node);
+
+      };
+
+    }
+
     free((*that)->nodes);
-
-  }
-
-  if ((*that)->nbNodePerEpoch != NULL) {
-
-    free((*that)->nbNodePerEpoch);
 
   }
 
@@ -151,11 +165,11 @@ bool GAViewerProcessPriorCmdLineArguments(
 #if BUILDMODE == 0
   if (that == NULL) {
 
-    CBoErr->_type = PBErrTypeNullPointer;
+    GAViewerErr->_type = PBErrTypeNullPointer;
     sprintf(
-      CBoErr->_msg,
+      GAViewerErr->_msg,
       "'that' is null");
-    PBErrCatch(CBoErr);
+    PBErrCatch(GAViewerErr);
 
   }
 
@@ -308,11 +322,11 @@ bool GAViewerProcessPosteriorCmdLineArguments(
 #if BUILDMODE == 0
   if (that == NULL) {
 
-    CBoErr->_type = PBErrTypeNullPointer;
+    GAViewerErr->_type = PBErrTypeNullPointer;
     sprintf(
-      CBoErr->_msg,
+      GAViewerErr->_msg,
       "'that' is null");
-    PBErrCatch(CBoErr);
+    PBErrCatch(GAViewerErr);
 
   }
 
@@ -385,21 +399,21 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
 #if BUILDMODE == 0
   if (that == NULL) {
 
-    CBoErr->_type = PBErrTypeNullPointer;
+    GAViewerErr->_type = PBErrTypeNullPointer;
     sprintf(
-      CBoErr->_msg,
+      GAViewerErr->_msg,
       "'that' is null");
-    PBErrCatch(CBoErr);
+    PBErrCatch(GAViewerErr);
 
   }
 
   if (that->pathHistoryImg == NULL) {
 
-    CBoErr->_type = PBErrTypeNullPointer;
+    GAViewerErr->_type = PBErrTypeNullPointer;
     sprintf(
-      CBoErr->_msg,
+      GAViewerErr->_msg,
       "'that->pathHistory' is null");
-    PBErrCatch(CBoErr);
+    PBErrCatch(GAViewerErr);
 
   }
 
@@ -408,47 +422,112 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
   // Create the GenBrush
   GenBrush* gb = GBCreateImage(&(that->dimHistoryImg));
 
-  // Get the scale factor for the conversion from epoch unit to pixel
-  float scaleEpoch =
+  // Get the surface of the GenBrush
+  GBSurface* surf = GBSurf(gb);
+
+  // Create the objects used to draw the genealogy
+  GBPixel colorEpoch = GBColorWhite;
+  colorEpoch._rgba[GBPixelRed] = 202;
+  colorEpoch._rgba[GBPixelGreen] = 202;
+  colorEpoch._rgba[GBPixelBlue] = 202;
+  GBInkSolid* inkEpoch = GBInkSolidCreate(&colorEpoch);
+  GBPixel colorBirth = GBColorBlack;
+  GBInkSolid* inkBirth = GBInkSolidCreate(&colorBirth);
+  GBToolPlotter* tool = GBToolPlotterCreate();
+  GBEyeOrtho* eye = GBEyeOrthoCreate(GBEyeOrthoViewFront);
+  GBHand hand = GBHandCreateStatic(GBHandTypeDefault);
+
+  // Create the layer for the epochs
+  GBLayer* layerEpoch = GBSurfaceAddLayer(surf, GBDim(gb));
+  GBLayerSetStackPos(layerEpoch, GBLayerStackPosBg);
+  GBLayerSetBlendMode(layerEpoch, GBLayerBlendModeOver);
+
+  // Create the layer for the births
+  GBLayer* layerBirth = GBSurfaceAddLayer(surf, GBDim(gb));
+  GBLayerSetStackPos(layerEpoch, GBLayerStackPosFg);
+  GBLayerSetBlendMode(layerEpoch, GBLayerBlendModeOver);
+
+  // Allocate memory for the curves for the epoch
+  SCurve** curveEpochs =
+    PBErrMalloc(
+      GAViewerErr,
+      sizeof(SCurve*) * that->nbEpoch);
+
+  // Vector to do computation
+  VecFloat3D v = VecFloatCreateStatic3D();
+
+  // Calculate the step along x between two epochs
+  float stepXEpoch =
     (float)VecGet(
       &(that->dimHistoryImg),
       0) /
-    (float)(that->nbEpoch + 2);
+    (float)(that->nbEpoch);
 
-  // Draw the epoch circles
+  // Calculate the bottom and top of the epoch curve
+  float yMinEpoch =
+    0.05 *
+    (float)VecGet(
+      &(that->dimHistoryImg),
+      1);
+  float yMaxEpoch =
+    0.95 *
+    (float)VecGet(
+      &(that->dimHistoryImg),
+      1);
+
+  // Loop on epochs
   for (
     unsigned int iEpoch = that->nbEpoch;
     iEpoch--;) {
 
-    /*
-    Spheroid* spheroid = SpheroidCreate(2);
-    Shapoid* shap = (Shapoid*)spheroid;
-    VecFloat2D v = VecFloatCreateStatic2D();
-    VecSet(&v, 0, 10.0); VecSet(&v, 1, 8.0);
-    ShapoidScale(shap, (VecFloat*)&v);
-    VecSet(&v, 0, 5.0); VecSet(&v, 1, 5.0);
-    ShapoidTranslate(shap, (VecFloat*)&v);
+    // Create the curve for the epoch
+    curveEpochs[iEpoch] = 
+      SCurveCreate(
+        1,
+        3,
+        1);
 
+    // Set the position of the control points
+    VecSet(
+      &v,
+      0,
+      stepXEpoch * ((float)iEpoch + 0.5)); 
+    VecSet(
+      &v,
+      1,
+      yMinEpoch); 
+    SCurveSetCtrl(
+      curveEpochs[iEpoch],
+      0,
+      (VecFloat*)&v);
+    VecSet(
+      &v,
+      1,
+      yMaxEpoch); 
+    SCurveSetCtrl(
+      curveEpochs[iEpoch],
+      1,
+      (VecFloat*)&v);
 
-    GBLayer* layer = GBSurfaceAddLayer(surf, &dim);
-    GBPixel blue = GBColorBlue;
-    GBInkSolid* ink = GBInkSolidCreate(&blue);
-    GBToolPlotter* tool = GBToolPlotterCreate();
-    GBEyeOrtho* eye = GBEyeOrthoCreate(GBEyeOrthoViewFront);
-    GBHand hand = GBHandCreateStatic(GBHandTypeDefault);
-    GBObjPod* pod = 
-      GBObjPodCreateShapoid(shap, &eye, &hand, tool, ink, layer);
-    GSetAppend(&(pod->_handShapoids), shap);
-    GBToolPlotterDraw(tool, pod);
+    // Create the pod for this curve
+    GBObjPod* pod =
+      GBAddSCurve(
+        gb,
+        curveEpochs[iEpoch],
+        &eye,
+        &hand,
+        tool,
+        inkEpoch,
+        layerEpoch);
+    (void)pod;
 
-    GBObjPodFree(&pod);
-    GBToolPlotterFree(&tool);
-    GBSurfaceImageFree((GBSurfaceImage**)&surf);
-    GBInkSolidFree(&ink);
-    GBEyeOrthoFree(&eye);
-    */
+    // Loop on the birth for this epoch
+    
 
   }
+
+  // Update the GenBrush
+  GBUpdate(gb);
 
   // Save the GenBrush
   GBSetFileName(
@@ -457,6 +536,18 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
   GBRender(gb);
 
   // Free memory
+  for (
+    unsigned int iEpoch = that->nbEpoch;
+    iEpoch--;) {
+
+    SCurveFree(curveEpochs + iEpoch);
+
+  }
+  free(curveEpochs);
+  GBInkSolidFree(&inkEpoch);
+  GBInkSolidFree(&inkBirth);
+  GBToolPlotterFree(&tool);
+  GBEyeOrthoFree(&eye);
   GBFree(&gb);
 
   // Return the success code
@@ -464,17 +555,17 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
 
 }
 
-// Create the nodes from the history
-void GAViewerHistoryToNodes(GAViewer* const that) {
+// Get the max id from the history
+unsigned long GAViewerHistoryGetMaxId(GAViewer* const that) {
 
 #if BUILDMODE == 0
   if (that == NULL) {
 
-    CBoErr->_type = PBErrTypeNullPointer;
+    GAViewerErr->_type = PBErrTypeNullPointer;
     sprintf(
-      CBoErr->_msg,
+      GAViewerErr->_msg,
       "'that' is null");
-    PBErrCatch(CBoErr);
+    PBErrCatch(GAViewerErr);
 
   }
 
@@ -497,78 +588,110 @@ void GAViewerHistoryToNodes(GAViewer* const that) {
 
   } while(GSetIterStep(&iter));
 
-  // Free memory for the nodes if necessary
-  if (that->nodes != NULL) {
+  return maxId;
 
-    free(that->nodes);
+}
+
+// Get the nb of epoch from the history
+unsigned long GAViewerHistoryGetNbEpoch(GAViewer* const that) {
+
+#if BUILDMODE == 0
+  if (that == NULL) {
+
+    GAViewerErr->_type = PBErrTypeNullPointer;
+    sprintf(
+      GAViewerErr->_msg,
+      "'that' is null");
+    PBErrCatch(GAViewerErr);
 
   }
+
+#endif
+
+  // Get the nb of epochs
+  unsigned long nbEpoch = 0;
+  GSetIterForward iter =
+    GSetIterForwardCreateStatic(&(that->history._genealogy));
+  do {
+
+    // Get the current birth
+    GAHistoryBirth* birth = GSetIterGet(&iter);
+
+    // Update the number of epoch
+    nbEpoch =
+      MAX(
+        nbEpoch,
+        birth->_epoch);
+
+  } while(GSetIterStep(&iter));
+
+  return nbEpoch + 1;
+
+}
+
+// Create the nodes from the history
+void GAViewerHistoryToNodes(GAViewer* const that) {
+
+#if BUILDMODE == 0
+  if (that == NULL) {
+
+    GAViewerErr->_type = PBErrTypeNullPointer;
+    sprintf(
+      GAViewerErr->_msg,
+      "'that' is null");
+    PBErrCatch(GAViewerErr);
+
+  }
+
+#endif
+
+  // Get the number of epoch
+  that->nbEpoch = GAViewerHistoryGetNbEpoch(that);
 
   // Allocate memory for the nodes
   that->nodes =
     PBErrMalloc(
       GAViewerErr,
-      sizeof(Node) * (maxId + 1));
+      sizeof(GSet) * (that->nbEpoch));
 
-  // Loop on the births
-  GSetIterReset(&iter);
-  do {
-
-    // Get the current birth
-    GAHistoryBirth* birth = GSetIterGet(&iter);
-
-    // Create the node
-    Node* node = that->nodes + birth->_idChild;
-    node->epoch = birth->_epoch;
-
-    //node->parents[0] = that->nodes + birth->_idParents[0];
-    //node->parents[1] = that->nodes + birth->_idParents[1];
-
-    // Initialise the position of the node to (nbEpoch, 0)
-    node->pos = VecFloatCreateStatic2D();
-    VecSet(
-      &(node->pos),
-      0,
-      (float)(node->epoch));
-
-    // Update the number of epoch
-    that->nbEpoch =
-      MAX(
-        that->nbEpoch,
-        node->epoch);
-
-  } while(GSetIterStep(&iter));
-
-  // Free memory for the number of nodes per epoch if necessary
-  if (that->nbNodePerEpoch != NULL) {
-
-    free(that->nbNodePerEpoch);
-
-  }
-
-  // Allocate memory for the number of nodes per epoch
-  that->nbNodePerEpoch =
-    PBErrMalloc(
-      GAViewerErr,
-      sizeof(unsigned int) * (that->nbEpoch + 1));
-
-  // Initialise the number of nodes per epoch
+  // Initialize the sets of nodes per epoch
   for (
-    unsigned int iEpoch = that->nbEpoch + 1;
+    unsigned long iEpoch = that->nbEpoch;
     iEpoch--;) {
 
-    that->nbNodePerEpoch[iEpoch] = 0;
+    that->nodes[iEpoch] = GSetCreateStatic();
 
   }
 
-  // Count the number of node per epoch
-  GSetIterReset(&iter);
+  // Loop on the birth
+  GSetIterForward iter =
+    GSetIterForwardCreateStatic(&(that->history._genealogy));
   do {
 
     // Get the current birth
     GAHistoryBirth* birth = GSetIterGet(&iter);
 
-    ++(that->nbNodePerEpoch[birth->_epoch]);
+    // Create a node
+    Node* node =
+      PBErrMalloc(
+        GAViewerErr,
+        sizeof(Node));
+
+    // Set the properties of the node according to the birth
+    node->epoch = birth->_epoch;
+    node->id = birth->_idChild;
+    node->parents[0] = birth->_idParents[0];
+    node->parents[1] = birth->_idParents[1];
+    node->pos = VecFloatCreateStatic3D();
+
+    // Add the node to the set of its epoch
+    float sortVal =
+      (float)(node->parents[0]) +
+      1.0 - 1.0 / (float)(node->id);
+    GSetAddSort(
+      (GSet*)(that->nodes + node->epoch),
+      node,
+      sortVal);
 
   } while(GSetIterStep(&iter));
 
