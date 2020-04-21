@@ -80,6 +80,12 @@ unsigned long GAViewerHistoryGetMaxId(GAViewer* const that);
 // Get the nb of epoch from the history
 unsigned long GAViewerHistoryGetNbEpoch(GAViewer* const that);
 
+// Search a node based on its id at a given epoch
+Node* GAViewerSearchNode(
+  const GAViewer* const that,
+          unsigned long epoch,
+          unsigned long id);
+
 // Function to create a new GAViewer,
 // Return a pointer to the new GAViewer
 GAViewer* GAViewerCreate(void) {
@@ -447,11 +453,8 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
   GBLayerSetStackPos(layerEpoch, GBLayerStackPosFg);
   GBLayerSetBlendMode(layerEpoch, GBLayerBlendModeOver);
 
-  // Allocate memory for the curves for the epoch
-  SCurve** curveEpochs =
-    PBErrMalloc(
-      GAViewerErr,
-      sizeof(SCurve*) * that->nbEpoch);
+  // Create a GSet to keep track of the curves
+  GSet curves = GSetCreateStatic();
 
   // Vector to do computation
   VecFloat3D v = VecFloatCreateStatic3D();
@@ -465,27 +468,31 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
 
   // Calculate the bottom and top of the epoch curve
   float yMinEpoch =
-    0.05 *
+    0.01 *
     (float)VecGet(
       &(that->dimHistoryImg),
       1);
   float yMaxEpoch =
-    0.95 *
+    0.99 *
     (float)VecGet(
       &(that->dimHistoryImg),
       1);
 
   // Loop on epochs
   for (
-    unsigned int iEpoch = that->nbEpoch;
-    iEpoch--;) {
+    unsigned int iEpoch = 0;
+    iEpoch < that->nbEpoch;
+    ++iEpoch) {
 
     // Create the curve for the epoch
-    curveEpochs[iEpoch] = 
+    SCurve* curve = 
       SCurveCreate(
         1,
         3,
         1);
+    GSetPush(
+      &curves,
+      curve);
 
     // Set the position of the control points
     VecSet(
@@ -497,7 +504,7 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
       1,
       yMinEpoch); 
     SCurveSetCtrl(
-      curveEpochs[iEpoch],
+      curve,
       0,
       (VecFloat*)&v);
     VecSet(
@@ -505,7 +512,7 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
       1,
       yMaxEpoch); 
     SCurveSetCtrl(
-      curveEpochs[iEpoch],
+      curve,
       1,
       (VecFloat*)&v);
 
@@ -513,7 +520,7 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
     GBObjPod* pod =
       GBAddSCurve(
         gb,
-        curveEpochs[iEpoch],
+        curve,
         &eye,
         &hand,
         tool,
@@ -521,8 +528,116 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
         layerEpoch);
     (void)pod;
 
+    // Declare some parameters to calculate the position of the node
+    unsigned long iNode = 0;
+    unsigned long nbNode = GSetNbElem(that->nodes + iEpoch);
+    float stepYEpoch = 
+      (float)VecGet(
+        &(that->dimHistoryImg),
+        1) /
+      (float)nbNode;
+
     // Loop on the birth for this epoch
-    
+    GSetIterForward iter =
+      GSetIterForwardCreateStatic(that->nodes + iEpoch);
+    do {
+
+      // Get the node
+      Node* node = GSetIterGet(&iter);
+
+      // Calculate the position of the node
+
+      VecSet(
+        &(node->pos),
+        0,
+        stepXEpoch * ((float)iEpoch + 0.5));
+      VecSet(
+        &(node->pos),
+        1,
+        stepYEpoch * ((float)iNode + 0.5));
+
+      // If we are not on the first epoch
+      if (iEpoch > 0) {
+
+        // Get the parent node
+        Node* father =
+          GAViewerSearchNode(
+            that,
+            iEpoch - 1,
+            node->parents[0]);
+
+        // If the node has a parent
+        if (father != NULL){
+
+          // Create the curve bewteen the child and its parent
+          SCurve* curveBirth = 
+            SCurveCreate(
+              3,
+              3,
+              1);
+          GSetPush(
+            &curves,
+            curveBirth);
+          SCurveSetCtrl(
+            curveBirth,
+            0,
+            (VecFloat*)&(node->pos));
+
+          VecSet(
+            &v,
+            0,
+            stepXEpoch * ((float)iEpoch)); 
+          VecSet(
+            &v,
+            1,
+            stepYEpoch * ((float)iNode + 0.5)); 
+
+          SCurveSetCtrl(
+            curveBirth,
+            1,
+            (VecFloat*)&v);
+
+          VecSet(
+            &v,
+            0,
+            stepXEpoch * ((float)iEpoch)); 
+          VecSet(
+            &v,
+            1,
+            VecGet(
+              &(father->pos),
+              1)); 
+          SCurveSetCtrl(
+            curveBirth,
+            2,
+            (VecFloat*)&v);
+
+
+          SCurveSetCtrl(
+            curveBirth,
+            3,
+            (VecFloat*)&(father->pos));
+
+          // Create the pod for this curve
+          pod =
+            GBAddSCurve(
+              gb,
+              curveBirth,
+              &eye,
+              &hand,
+              tool,
+              inkBirth,
+              layerBirth);
+          (void)pod;
+
+        }
+
+      }
+
+      // Increment the index of node
+      ++iNode;
+
+    } while (GSetIterStep(&iter));
 
   }
 
@@ -534,16 +649,16 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
     gb,
     that->pathHistoryImg);
   GBRender(gb);
+  printf(
+    "Saved image [%s]\n",
+    that->pathHistoryImg);
 
   // Free memory
-  for (
-    unsigned int iEpoch = that->nbEpoch;
-    iEpoch--;) {
+  while (GSetNbElem(&curves) > 0) {
 
-    SCurveFree(curveEpochs + iEpoch);
+    free(GSetPop(&curves));
 
   }
-  free(curveEpochs);
   GBInkSolidFree(&inkEpoch);
   GBInkSolidFree(&inkBirth);
   GBToolPlotterFree(&tool);
@@ -686,14 +801,70 @@ void GAViewerHistoryToNodes(GAViewer* const that) {
 
     // Add the node to the set of its epoch
     float sortVal =
-      (float)(node->parents[0]) +
-      1.0 - 1.0 / (float)(node->id);
+      (float)(node->parents[0]); /* +
+      1.0 - 1.0 / (float)(node->id);*/
     GSetAddSort(
       (GSet*)(that->nodes + node->epoch),
       node,
       sortVal);
 
   } while(GSetIterStep(&iter));
+
+}
+
+// Search a node based on its id at a given epoch
+Node* GAViewerSearchNode(
+  const GAViewer* const that,
+          unsigned long epoch,
+          unsigned long id) {
+
+#if BUILDMODE == 0
+  if (that == NULL) {
+
+    GAViewerErr->_type = PBErrTypeNullPointer;
+    sprintf(
+      GAViewerErr->_msg,
+      "'that' is null");
+    PBErrCatch(GAViewerErr);
+
+  }
+
+  if (epoch >= that->nbEpoch) {
+
+    GAViewerErr->_type = PBErrTypeInvalidArg;
+    sprintf(
+      GAViewerErr->_msg,
+      "'epoch' is invalid (%ld< %ld)",
+      epoch,
+      that->nbEpoch);
+    PBErrCatch(GAViewerErr);
+
+  }
+
+#endif
+
+  // Declare a pointer to the searched node
+  Node* node = NULL;
+
+  // Loop on the node of the epoch
+  GSetIterForward iter = GSetIterForwardCreateStatic(that->nodes + epoch);
+  do {
+
+    // Get the node
+    Node* n = GSetIterGet(&iter);
+
+    // If this is the searched node
+    if (n->id == id) {
+
+      // Memorize the found ndoe
+      node = n;
+
+    }
+
+  } while (node == NULL && GSetIterForwardStep(&iter));
+
+  // Return the found node
+  return node;
 
 }
 

@@ -49,7 +49,7 @@ clean:
 	rm -f *.o main
 
 test: gaviewer
-	gaviewer -hist test.json -size 200 -toImg genealogy.tga
+	gaviewer -hist test.json -size 800 -toImg genealogy.tga
 
 debug :
 	valgrind -v --track-origins=yes --leak-check=full \
