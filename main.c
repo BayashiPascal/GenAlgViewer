@@ -298,7 +298,7 @@ bool GAViewerProcessPriorCmdLineArguments(
       iArg < argc - 1) {
 
       // Decode the size
-      int size[2] = {0,0};
+      int size[2] = {0, 0};
       char* posComma =
         strchr(
           argv[iArg + 1],
@@ -524,14 +524,28 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
   GBHand hand = GBHandCreateStatic(GBHandTypeDefault);
 
   // Create the layer for the epochs
-  GBLayer* layerEpoch = GBSurfaceAddLayer(surf, GBDim(gb));
-  GBLayerSetStackPos(layerEpoch, GBLayerStackPosFg);
-  GBLayerSetBlendMode(layerEpoch, GBLayerBlendModeOver);
+  GBLayer* layerEpoch =
+    GBSurfaceAddLayer(
+      surf,
+      GBDim(gb));
+  GBLayerSetStackPos(
+    layerEpoch,
+    GBLayerStackPosFg);
+  GBLayerSetBlendMode(
+    layerEpoch,
+    GBLayerBlendModeOver);
 
   // Create the layer for the births
-  GBLayer* layerBirth = GBSurfaceAddLayer(surf, GBDim(gb));
-  GBLayerSetStackPos(layerEpoch, GBLayerStackPosBg);
-  GBLayerSetBlendMode(layerEpoch, GBLayerBlendModeOver);
+  GBLayer* layerBirth =
+    GBSurfaceAddLayer(
+      surf,
+      GBDim(gb));
+  GBLayerSetStackPos(
+    layerEpoch,
+    GBLayerStackPosBg);
+  GBLayerSetBlendMode(
+    layerEpoch,
+    GBLayerBlendModeOver);
 
   // Create a GSet to keep track of the curves
   GSet curves = GSetCreateStatic();
@@ -572,7 +586,7 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
     unsigned long jEpoch = iEpoch - that->fromEpoch;
 
     // Create the curve for the epoch
-    SCurve* curve = 
+    SCurve* curve =
       SCurveCreate(
         1,
         3,
@@ -585,11 +599,11 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
     VecSet(
       &v,
       0,
-      stepXEpoch * ((float)jEpoch + 0.5)); 
+      stepXEpoch * ((float)jEpoch + 0.5));
     VecSet(
       &v,
       1,
-      yMinEpoch); 
+      yMinEpoch);
     SCurveSetCtrl(
       curve,
       0,
@@ -597,7 +611,7 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
     VecSet(
       &v,
       1,
-      yMaxEpoch); 
+      yMaxEpoch);
     SCurveSetCtrl(
       curve,
       1,
@@ -617,7 +631,7 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
     // Declare some parameters to calculate the position of the node
     unsigned long iNode = 0;
     unsigned long nbNode = GSetNbElem(that->nodes + iEpoch);
-    float stepYEpoch = 
+    float stepYEpoch =
       (float)VecGet(
         &(that->dimHistoryImg),
         1) /
@@ -665,7 +679,7 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
         0,
         VecGet(
           &(node->pos),
-          0)); 
+          0));
       VecSet(
         &w,
         1,
@@ -696,10 +710,10 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
             node->parents[0]);
 
         // If the node has a parent
-        if (father != NULL){
+        if (father != NULL) {
 
           // Create the curve bewteen the child and its parent
-          SCurve* curveBirth = 
+          SCurve* curveBirth =
             SCurveCreate(
               3,
               3,
@@ -715,11 +729,11 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
           VecSet(
             &v,
             0,
-            stepXEpoch * ((float)jEpoch)); 
+            stepXEpoch * ((float)jEpoch));
           VecSet(
             &v,
             1,
-            stepYEpoch * ((float)iNode + 0.5)); 
+            stepYEpoch * ((float)iNode + 0.5));
 
           SCurveSetCtrl(
             curveBirth,
@@ -729,18 +743,17 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
           VecSet(
             &v,
             0,
-            stepXEpoch * ((float)jEpoch)); 
+            stepXEpoch * ((float)jEpoch));
           VecSet(
             &v,
             1,
             VecGet(
               &(father->pos),
-              1)); 
+              1));
           SCurveSetCtrl(
             curveBirth,
             2,
             (VecFloat*)&v);
-
 
           SCurveSetCtrl(
             curveBirth,
@@ -798,11 +811,13 @@ bool GAViewerHistoryToImg(GAViewer* const that) {
     free(GSetPop(&curves));
 
   }
+
   while (GSetNbElem(&shapoids) > 0) {
 
     free(GSetPop(&shapoids));
 
   }
+
   GBInkSolidFree(&inkEpoch);
   GBInkSolidFree(&inkBirth);
   GBInkSolidFree(&inkSurvive);
@@ -945,13 +960,9 @@ void GAViewerHistoryToNodes(GAViewer* const that) {
     node->pos = VecFloatCreateStatic3D();
 
     // Add the node to the set of its epoch
-    float sortVal =
-      (float)(node->parents[0]); /* +
-      1.0 - 1.0 / (float)(node->id);*/
-    GSetAddSort(
+    GSetAppend(
       (GSet*)(that->nodes + node->epoch),
-      node,
-      sortVal);
+      node);
 
   } while(GSetIterStep(&iter));
 
@@ -1045,6 +1056,7 @@ void GAViewerHistoryToNodes(GAViewer* const that) {
       ++iNode;
 
     } while(GSetIterStep(&iterNode));
+
   }
 
 }
