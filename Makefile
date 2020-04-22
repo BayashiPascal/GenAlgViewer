@@ -2,7 +2,7 @@
 # 0: development (max safety, no optimisation)
 # 1: release (min safety, optimisation)
 
-BUILD_MODE?=0
+BUILD_MODE?=1
 
 # Path to PBMake
 
@@ -49,8 +49,11 @@ clean:
 	rm -f *.o main
 
 test: gaviewer
-	gaviewer -hist test.json -size 800 -toImg genealogy.tga
+	gaviewer -hist test.json -size 800,400 -toImg genealogy.tga -from 0 -to 5
 
-debug :
+debug:
 	valgrind -v --track-origins=yes --leak-check=full \
-	--gen-suppressions=yes --show-leak-kinds=all ./gaviewer -hist test.json -size 200 -toImg genealogy.tga
+	--gen-suppressions=yes --show-leak-kinds=all ./gaviewer -hist test.json -size 200,200 -toImg genealogy.tga
+
+install:
+	cp gaviewer ~/Tools/
